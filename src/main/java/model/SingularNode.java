@@ -25,11 +25,16 @@ public class SingularNode {
             String port = args[1];
             String bootstrap = args[2];
             Node node = new Node(name, Integer.parseInt(port), bootstrap);
+            node.addEndpoints();
+            node.start();
+            System.out.println("LALLALA");
         } else if (args.length == 2){
             String name = args[0];
             String port = args[1];
             Node node = new Node(name, Integer.parseInt(port));
-            
+            node.addEndpoints();
+            node.start();
+            System.out.println("LALLALddddA");
         } else {
             System.out.println("INVALID COMMAND");
         }

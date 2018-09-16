@@ -6,6 +6,7 @@
 package model;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.StringJoiner;
 
 /**
@@ -79,6 +80,15 @@ public class NodeData {
                 ks.address.add(address);
             }
             response = "subscribed";
+        }
+        return response;
+    }
+    
+    public String removeSubscribe(String address){
+        String response = "-1";
+        for(KeySubscribe ks : this.keys){
+            ks.address.removeAll(Collections.singleton(address));
+            response = "removed";
         }
         return response;
     }

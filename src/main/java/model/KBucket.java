@@ -6,6 +6,7 @@
 package model;
 
 import java.util.ArrayList;
+import java.util.Collections;
 
 /**
  *
@@ -49,7 +50,7 @@ public class KBucket {
     public Bucket getBucket(int i) {
         return buckets.get(i);
     }
-
+    
     //get n closest node from ALL buckets
     public ArrayList<NodeInfo> getClosest(String key, int n) {
         ArrayList shortlist = new ArrayList<>();

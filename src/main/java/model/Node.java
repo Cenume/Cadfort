@@ -38,9 +38,21 @@ import org.json.JSONArray;
  */
 public class Node extends CoapServer {
 
-    private final int k = 15;
+    private final int k = 10;
     private final int alpha = 3;
     private static int COAP_PORT = 5683;
+    public static int postCount = 0;
+    public static int getCount = 0;
+    public static int pingCount = 0;
+    public static int findNodeCount = 0;
+    public static int subscribeCount = 0;
+    public static long totalByteReceived = 0;
+    
+    
+    public int thisPostCount = 0;
+    public int thisGetCount = 0;
+    public long byteReceived = 0;
+    
     NodeInfo nodeInfo = null;
     NodeData data = null;
     KBucket kBuckets = null;
@@ -58,6 +70,16 @@ public class Node extends CoapServer {
         return nodeInfo;
     }
 
+    public long getByteReceived() {
+        return byteReceived;
+    }
+    public int getThisPostCount() {
+        return thisPostCount;
+    }
+    public int getThisGetCount() {
+        return thisGetCount;
+    }
+    
     public NodeData getData() {
         return data;
     }
@@ -101,6 +123,9 @@ public class Node extends CoapServer {
         }
         return result;
     }
+    public void removeFrom(ArrayList<NodeInfo> nodeInfos, String address) {
+        nodeInfos.removeIf(n->n.getAddress().equals(address));
+    }
     public void sortNodeInfos(ArrayList<NodeInfo> nodeInfos, String key) {
         Collections.sort(nodeInfos, (a, b) -> distance(key, a) < distance(key, b) ? -1 : distance(key, a) == distance(key, b) ? 0 : 1);
     }
@@ -116,6 +141,15 @@ public class Node extends CoapServer {
         return Long.parseLong(id) ^ Long.parseLong(id2);
     }
 
+    public ArrayList<NodeInfo> getAll(){
+        ArrayList allBucket = new ArrayList<>();
+        kBuckets.getBuckets().forEach((bucket) -> {
+            allBucket.addAll(bucket.getLedger());
+        });
+        sortNodeInfos(allBucket, this.nodeInfo.getDhtId());
+        return allBucket;
+    }
+    
     public void addEndpoints() {
 //        for (InetAddress addr : EndpointManager.getEndpointManager().getNetworkInterfaces()) {
 //            //System.out.println("address: " + addr.getHostAddress());
@@ -154,8 +188,8 @@ public class Node extends CoapServer {
         add(new DataResource());
         add(new DHTResource());
         //ADD JOIN NETWORK
-        this.addEndpoints();
-        this.start();
+//        this.addEndpoints();
+//        this.start();
         if (!bootstrap.equals("None")) {
             this.sendPing(bootstrap);
             for (NodeInfo n : this.nodeLookup(this.getNodeInfo().getDhtId())) {
@@ -170,21 +204,34 @@ public class Node extends CoapServer {
                 obj.get("key").toString(),
                 obj.get("timestamp").toString(),
                 obj.get("value").toString());
-        ExecutorService executor = Executors.newFixedThreadPool(5);
-        for (String destination : this.data.getSubscriber(obj.get("key").toString())) {
-            executor.execute(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        coapPost("coap://" + destination + "/data", obj.toString());
-                    } catch (URISyntaxException ex) {
-                        Logger.getLogger(Node.class.getName()).log(Level.SEVERE, null, ex);
+        System.out.println(response);
+        System.out.println(obj.toString(4));
+        if (response.equals("new") && !obj.has("soft")){
+            long temp = obj.get("key").toString().hashCode() + 2147483647;
+            ArrayList<NodeInfo> candidate = nodeLookup(Long.toString(temp));
+            System.out.println("Default Subscribe " + obj.get("key").toString() + " to:");
+            //trimArray(candidate, alpha);
+            for (NodeInfo n : candidate){
+                this.getData().subscribe(obj.get("key").toString(), n.getAddress());
+                System.out.println("    " + n.getAddress() + " " + n.getDhtId() + " " + Long.toString(distance(Long.toString(temp), n)));
+            }
+        } else {
+            obj.put("soft", true);
+            ExecutorService executor = Executors.newFixedThreadPool(5);
+            for (String destination : this.data.getSubscriber(obj.get("key").toString())) {
+                executor.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            coapPost("coap://" + destination + "/data", obj.toString());
+                        } catch (URISyntaxException ex) {
+                            Logger.getLogger(Node.class.getName()).log(Level.SEVERE, null, ex);
+                        }
                     }
-                }
-            });
-
+                });
+            }
+            executor.shutdown();
         }
-        executor.shutdown();
         return response;
     }
 
@@ -196,7 +243,10 @@ public class Node extends CoapServer {
         String response;
         URI uri = new URI(target);
         CoapClient client = new CoapClient(uri);
+        long start = System.nanoTime();
         CoapResponse coapResponse = client.get();
+        long elapsedTime = System.nanoTime() - start;
+        //System.out.println("get " + elapsedTime + " ns");
         if (coapResponse != null) {
             response = Utils.prettyPrint(coapResponse);
         } else {
@@ -206,18 +256,34 @@ public class Node extends CoapServer {
             response = "No response received.";
             kBuckets.removeAddress(target.split("/",0)[2]);
         }
+        getCount++;
+        thisGetCount++;
+        //System.out.println("GET " + getCount);
+        byteReceived += coapResponse.advanced().getPayloadSize();
+        totalByteReceived += coapResponse.advanced().getPayloadSize();
+        //System.out.println("byte " + byteReceived);
         return response;
     }
     
     public String coapPost(String target, String payload) throws URISyntaxException {
         URI uri = new URI(target); // URI parameter of the request
         CoapClient client = new CoapClient(uri);
+        long start = System.nanoTime();
         CoapResponse coapResponse = client.post(payload, 0);
+        long elapsedTime = System.nanoTime() - start;
+        //System.out.println("post " + payload + " : " + elapsedTime + " ns");
+        postCount++;
+        thisPostCount++;
+        //System.out.println("POST " + postCount);
         if (coapResponse != null) {
+            byteReceived += coapResponse.advanced().getPayloadSize();
+            totalByteReceived += coapResponse.advanced().getPayloadSize();
+            //System.out.println("byte " + byteReceived);
             return new String(coapResponse.getPayload());
         } else {
             if (target.split("/",0).length > 2){
                 kBuckets.removeAddress(target.split("/",0)[2]);
+                data.removeSubscribe(target.split("/",0)[2]);
             }
             return "-1";
         }
@@ -239,6 +305,8 @@ public class Node extends CoapServer {
                 kBuckets.update(n);
             };
         }
+        pingCount++;
+        //System.out.println("Ping " + pingCount);
         return response;
     }
 
@@ -250,6 +318,8 @@ public class Node extends CoapServer {
 
     public String sendFindNode(String destination, String key) throws URISyntaxException {
         String payload = "{ \"type\":\"findNode\",\"key\":\"" + key + "\"}";
+        findNodeCount++;
+        //System.out.println("FindNode " + findNodeCount);
         return coapPost("coap://" + destination + "/dht", payload);
     }
 
@@ -261,12 +331,14 @@ public class Node extends CoapServer {
     public String sendSubscribe(String destination, String address, String key) throws URISyntaxException {
         String payload = "{ \"type\":\"subscribe\",\"key\":\"" + key
                 + "\",\"address\":\"" + address + "\"}";
+        subscribeCount++;
+        //System.out.println("SUB " + subscribeCount);
         return coapPost("coap://" + destination + "/dht", payload);
     }
 
     //KADEMLIA ALGORITHM
     public ArrayList<NodeInfo> nodeLookup(String key) throws URISyntaxException { //GET K closest from network
-        long startTime = System.nanoTime();
+        //long startTime = System.nanoTime();
 
         //System.out.println("START NODELOOKUP");
         ArrayList<NodeInfo> shortlist = kBuckets.getClosest(key, alpha);
@@ -278,15 +350,25 @@ public class Node extends CoapServer {
             do {
                 closestNode = shortlist.get(0);
                 newNodes.clear();
+                removeFrom(shortlist, this.nodeInfo.getAddress());
+                //System.out.println("+" + this.nodeInfo.getAddress());
                 iterate = trimArray(shortlist, alpha);
+//                for(NodeInfo it : iterate){
+//                    System.out.println(" " + it.getAddress());
+//                }
+                //ExecutorService executor = Executors.newFixedThreadPool(5);
                 for (NodeInfo n : iterate) {
+                    //System.out.println("SFN " + n.getAddress());
                     try {
                         String response = sendFindNode(n.getAddress(), key);
                         if (isPayloadValid(response)) {
                             probed.add(n);
                             JSONArray arr = new JSONArray(response);
                             for (int i = 0; i < arr.length(); i++) {
-                                if (!isContaining(shortlist, arr.getJSONObject(i).get("dhtId").toString()) && !isContaining(newNodes, arr.getJSONObject(i).get("dhtId").toString())) {
+                                if (!isContaining(shortlist, arr.getJSONObject(i).get("dhtId").toString()) 
+                                        && !isContaining(newNodes, arr.getJSONObject(i).get("dhtId").toString())
+                                        && !arr.getJSONObject(i).get("address").toString().equals(this.nodeInfo.getAddress())
+                                        ) {
                                     NodeInfo temp = new NodeInfo(arr.getJSONObject(i).get("id").toString(), arr.getJSONObject(i).get("address").toString());
                                     newNodes.add(temp);
                                 }
@@ -301,19 +383,20 @@ public class Node extends CoapServer {
                 shortlist.addAll(newNodes);
                 sortNodeInfos(shortlist, key);
                 shortlist = trimArray(shortlist, k);
-                for (NodeInfo n : shortlist) {
-                    //System.out.println("            " + n.getJson() + distance(key,n));
-                }
-            } while (distance(key, shortlist.get(0)) < distance(key, closestNode));
+//                for (NodeInfo n : shortlist) {
+//                    System.out.println("            " + n.getJson() + distance(key,n));
+//                }
+                //System.out.println(distance(key, shortlist.get(0)) + " VS " + distance(key, closestNode));
+            } while (probed.size() < k && distance(key, closestNode) != 0);
         }
         //System.out.println("NODE LOOKUP RESULT ");
-        for (NodeInfo n : shortlist) {
-            //System.out.println("    " + n.getJson());
-        }
+//        for (NodeInfo n : shortlist) {
+//            System.out.println("    " + n.getJson());
+//        }
 
-        long stopTime = System.nanoTime();
-        long elapsedTime = stopTime - startTime;
-        //System.out.println("TIME : " + elapsedTime);
+//        long stopTime = System.nanoTime();
+//        long elapsedTime = stopTime - startTime;
+//        System.out.println("TIME : " + elapsedTime);
 
         return shortlist;
     }
@@ -335,17 +418,22 @@ public class Node extends CoapServer {
 
     public String subscribe(String key) throws URISyntaxException {
         long temp = key.hashCode() + 2147483647;
-        boolean found = false;
-        for (NodeInfo data : this.getKBuckets().getClosest(Long.toString(temp), k)) {
+        for (NodeInfo data : this.getAll()) {
             if (this.isPayloadValid(this.sendSubscribe(data.getAddress(), this.getNodeInfo().getAddress(), key))) {
-                found = true;
+                return "subscribed";
             }
         }
-        if (found) {
-            return "subscribed";
-        } else {
-            return "-1";
+        System.out.println("Not Found in bucket");
+        ArrayList<NodeInfo> candidate = nodeLookup(Long.toString(temp));
+//        for (NodeInfo data : candidate) {
+//            System.out.println(data.getJson());
+//        }
+        for (NodeInfo data : candidate) {
+            if (this.isPayloadValid(this.sendSubscribe(data.getAddress(), this.getNodeInfo().getAddress(), key))) {
+                return "subscribed";
+            }
         }
+        return "-1";
     }
 
     /**
@@ -397,7 +485,7 @@ public class Node extends CoapServer {
         public void handlePOST(CoapExchange exchange) {
             if (exchange.getRequestOptions().hasContentFormat()) {
                 JSONObject obj = new JSONObject(exchange.getRequestText());
-                System.out.println("JSON: " + obj.toString());
+                //System.out.println("JSON: " + obj.toString());
                 String response = null;
                 try {
                     response = Node.this.pushData(obj);
@@ -423,12 +511,11 @@ public class Node extends CoapServer {
             exchange.respond(Node.this.nodeInfo.getAddress() + " " + Node.this.nodeInfo.getDhtId());
         }
 
-        //TODO add broadcast
         @Override
         public void handlePOST(CoapExchange exchange) {
             if (exchange.getRequestOptions().hasContentFormat()) {
                 JSONObject obj = new JSONObject(exchange.getRequestText());
-                System.out.println("DHT POST JSON: " + obj.toString());
+                //System.out.println("DHT POST JSON: " + obj.toString());
                 String response;
                 switch (obj.get("type").toString()) {
                     case "ping":
